@@ -66,7 +66,7 @@ Business rules: `docs/RULES.md`. Read it before touching `Calculator.kt`.
 - Backup/restore (`data/Backup.kt`): zip of data.json + attachments, via the system file picker; the key is excluded. Restore sets the
   old data aside in `files/before-restore/`.
 - Reminders (`reminders/`): daily WorkManager check; rules in engine `Reminders.kt` (from the 25th, waiting months, at most every other day).
-- Updates (`update/Updater.kt`): checks `https://api.github.com/repos/<wewrc.updateRepo>/releases/latest` (at most daily at start, or the
+- Updates (`update/Updater.kt`): checks `https://api.github.com/repos/<wewrc.updateRepo>/releases/latest` (at most daily at start, never automatically in debug builds, or the
   Settings button), downloads the APK, verifies the digest when given, then Android's installer asks the person to confirm
   (needs "install unknown apps" for the app; Play Protect may ask to scan). Release signing key lives OUTSIDE the project in
   `C:\Users\zaina\WaterSplit-signing\`; see `docs/RELEASING.md` and `.github/workflows/release.yml`.
