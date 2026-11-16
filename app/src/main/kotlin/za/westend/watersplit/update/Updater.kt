@@ -111,6 +111,10 @@ object Updater {
     /** Checks at most once a day, quietly, when the app starts. */
     fun checkIfDue(context: Context) {
         if (!isConfigured) return
+        // Development (debug) builds never check GitHub on their own, so repeated installs and launches cannot use up
+        // GitHub's request limit. The Settings button still works, and a local test server (files/update-base.txt) is still checked.
+        val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable && !File(context.filesDir, "update-base.txt").exists()) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val last = prefs.getLong("lastCheck", 0L)
         if (System.currentTimeMillis() - last < CHECK_EVERY_MS) return
