@@ -1,5 +1,6 @@
 package za.westend.watersplit.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -21,6 +22,9 @@ import za.westend.watersplit.data.Store
 import za.westend.watersplit.engine.House
 import za.westend.watersplit.share.ShareInbox
 import za.westend.watersplit.share.ShareSheet
+import za.westend.watersplit.share.saveToDownloads
+import za.westend.watersplit.share.shareAttachment
+import za.westend.watersplit.engine.MonthKey
 import za.westend.watersplit.update.Updater
 import za.westend.watersplit.share.StatementImage
 
@@ -161,6 +165,7 @@ fun AppRoot(store: Store, inbox: ShareInbox) {
                         onTenants = { screen = Screen.Tenants(back = s) },
                     )
                     is Screen.Viewer -> {
+                        val context = LocalContext.current
                         val att = (store.draft(s.key)?.attachment(s.kind) ?: store.month(s.key)?.attachment(s.kind))
                         val file = att?.let { store.attachmentFile(s.key, it) }
                         if (att != null && file != null && file.exists()) {
@@ -169,6 +174,19 @@ fun AppRoot(store: Store, inbox: ShareInbox) {
                                 file = file,
                                 mime = att.mime,
                                 onClose = { screen = s.back },
+                                onShare = {
+                                    val label = s.kind.label.replaceFirstChar { it.uppercase() } + " " + MonthKey.parse(s.key).label()
+                                    ShareSheet.shareAttachment(context, file, att.mime, label)
+                                },
+                                onDownload = {
+                                    val label = s.kind.label.replaceFirstChar { it.uppercase() } + " " + MonthKey.parse(s.key).label()
+                                    val saved = ShareSheet.saveToDownloads(context, file, att.mime, label)
+                                    Toast.makeText(
+                                        context,
+                                        if (saved) "Saved in your Downloads folder" else "Couldn't save the file",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                },
                             )
                         } else {
                             LaunchedEffect(s) { screen = s.back }

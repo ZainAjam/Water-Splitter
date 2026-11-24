@@ -242,15 +242,8 @@ fun DraftScreen(
     val meterChecked = !meterInfo.fromReader || meterInfo.confirmed
     val canSend = check.ready && invoiceChecked && meterChecked && !invoiceReading && !meterReading
 
-    // Typing in any box also opens the editor, so the boxes never collapse under her while she types.
-    fun inv(set: (String) -> Unit): (String) -> Unit = { v ->
-        set(v)
-        editInvoice = true
-    }
-    fun mtr(set: (String) -> Unit): (String) -> Unit = { v ->
-        set(v)
-        editMeter = true
-    }
+    // The side-by-side check: the document on one side, the numbers read from it on the other.
+    var comparing by remember(key) { mutableStateOf<AttachmentKind?>(null) }
 
     // Finishing the draft: the files stay in the app; the originals on the phone (if she picked them from there) are
     // only deleted after she says so.
@@ -299,7 +292,7 @@ fun DraftScreen(
         // ---------------- 1. invoice ----------------
         Panel {
             SectionTitle("1. Municipal invoice")
-            AttachmentArea(store, key, AttachmentKind.INVOICE, draft.invoice, onView) { choosing = AttachmentKind.INVOICE }
+            AttachmentArea(store, key, AttachmentKind.INVOICE, draft.invoice, onView, onCompare = { comparing = AttachmentKind.INVOICE }) { choosing = AttachmentKind.INVOICE }
             if (invoiceReading) {
                 ReadingProgress("Reading the invoice…")
             } else {
@@ -351,22 +344,7 @@ fun DraftScreen(
                     if (invoiceStage == Stage.CAPTURED) "Change any number that doesn't match the invoice." else "Type the numbers from the invoice, before VAT.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                NumberField("Property water use (kL)", form.totalKl, inv { form.totalKl = it }, "The \"CONS.\" number next to the water meter on the invoice")
-                NumberField("Water (R)", form.water, inv { form.water = it })
-                NumberField("Water availability charge (R)", form.avail, inv { form.avail = it })
-                NumberField("Sewerage (R)", form.sewer, inv { form.sewer = it })
-                NumberField("Sewerage availability (R)", form.sewAvail, inv { form.sewAvail = it })
-                NumberField("Refuse charge (R)", form.refuse, inv { form.refuse = it })
-                NumberField("General rates (R)", form.rates, inv { form.rates = it })
-                NumberField("Interest (R) - if any", form.interest, inv { form.interest = it })
-                NumberField(
-                    "Balance brought forward / adjustment (R)",
-                    form.adjustments,
-                    inv { form.adjustments = it },
-                    "Anything left over from last month. Type a minus sign for a credit, e.g. -18.10",
-                    KeyboardType.Text,
-                )
-                NumberField("Total payable on the invoice (R)", form.payable, inv { form.payable = it }, "Optional, but lets the app double-check the numbers")
+                InvoiceNumberFields(form) { editInvoice = true }
                 if (invoiceStage == Stage.CAPTURED) {
                     Button(onClick = {
                         editInvoice = false
@@ -386,7 +364,7 @@ fun DraftScreen(
         // ---------------- 2. meter ----------------
         Panel {
             SectionTitle("2. Outbuilding water meter")
-            AttachmentArea(store, key, AttachmentKind.METER, draft.meter, onView) { choosing = AttachmentKind.METER }
+            AttachmentArea(store, key, AttachmentKind.METER, draft.meter, onView, onCompare = { comparing = AttachmentKind.METER }) { choosing = AttachmentKind.METER }
             if (meterReading) {
                 ReadingProgress("Reading the meter photo…")
             } else {
@@ -438,24 +416,7 @@ fun DraftScreen(
                     if (meterStage == Stage.CAPTURED) "Change anything that doesn't match the photo." else "Type the digits shown on the meter in the photo.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                NumberField(
-                    "Previous reading (kL)",
-                    form.prev,
-                    mtr {
-                        form.prev = it
-                        form.prevEdited = true
-                    },
-                    store.previousReadingFor(key).source.takeIf { !form.prevEdited },
-                )
-                NumberField("Reading now (kL)", form.curr, mtr { form.curr = it }, "The digits shown on the meter in the photo")
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Switch(checked = form.replaced, onCheckedChange = { form.replaced = it; editMeter = true })
-                    Text("The meter was replaced this month", Modifier.weight(1f))
-                }
-                if (form.replaced) {
-                    NumberField("Last reading of the old meter (kL)", form.oldFinal, mtr { form.oldFinal = it })
-                    NumberField("First reading of the new meter (kL)", form.newStart, mtr { form.newStart = it })
-                }
+                MeterNumberFields(store, key, form) { editMeter = true }
                 check.meterUse?.let { use ->
                     Text(
                         "Outbuilding used ${Fmt.kl(use.kl)} this month",
@@ -551,6 +512,52 @@ fun DraftScreen(
         ) { Text("Review & send", style = MaterialTheme.typography.titleMedium) }
         TextButton(onClick = { askDelete = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Delete this draft", color = MaterialTheme.colorScheme.error)
+        }
+    }
+
+    comparing?.let { kind ->
+        val att = if (kind == AttachmentKind.INVOICE) draft.invoice else draft.meter
+        val file = att?.let { store.attachmentFile(key, it) }
+        if (att == null || file == null || !file.exists()) {
+            comparing = null
+        } else {
+            val isInvoice = kind == AttachmentKind.INVOICE
+            val info = if (isInvoice) invoiceInfo else meterInfo
+            CompareDialog(
+                title = if (isInvoice) "Invoice and numbers" else "Meter photo and reading",
+                file = file,
+                mime = att.mime,
+                onClose = { comparing = null },
+            ) {
+                if (info.fromReader && !info.confirmed) {
+                    Text(
+                        if (isInvoice) "Read from the invoice. Compare each number with the invoice, and change any that is wrong."
+                        else "Read from the photo. Compare it with the photo, and change it if it is wrong.",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } else if (info.fromReader) {
+                    Text(if (isInvoice) "Checked against the invoice." else "Checked against the photo.", fontWeight = FontWeight.SemiBold)
+                }
+                (if (isInvoice) check.invoiceProblems else check.meterProblems).forEach { Text(it, color = MaterialTheme.colorScheme.error) }
+                ReadNotes(info.notes) { comparing = null; moveTo(it) }
+                if (isInvoice) InvoiceNumberFields(form) {} else MeterNumberFields(store, key, form) {}
+                if (!isInvoice) {
+                    check.meterUse?.let { use ->
+                        Text("Outbuilding used ${Fmt.kl(use.kl)} this month", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                if (info.fromReader && !info.confirmed) {
+                    Button(
+                        onClick = {
+                            flush()
+                            store.confirmReading(key, kind)
+                            comparing = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (isInvoice) "These numbers match the invoice" else "This reading matches the photo") }
+                }
+                OutlinedButton(onClick = { flush(); comparing = null }, modifier = Modifier.fillMaxWidth()) { Text("Close") }
+            }
         }
     }
 
@@ -684,12 +691,23 @@ private fun ReadyLine(name: String, noun: String, hasFile: Boolean, captured: Bo
 }
 
 @Composable
-private fun AttachmentArea(store: Store, key: String, kind: AttachmentKind, att: Attachment?, onView: (AttachmentKind) -> Unit, onPick: () -> Unit) {
+private fun AttachmentArea(
+    store: Store,
+    key: String,
+    kind: AttachmentKind,
+    att: Attachment?,
+    onView: (AttachmentKind) -> Unit,
+    onCompare: () -> Unit,
+    onPick: () -> Unit,
+) {
     val file = att?.let { store.attachmentFile(key, it) }
     if (att != null && file != null && file.exists()) {
         AttachmentThumb(file, att.mime)
+        Button(onClick = onCompare, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text(if (kind == AttachmentKind.INVOICE) "Check the numbers against the invoice" else "Check the reading against the photo")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { onView(kind) }) { Text("View full size") }
+            OutlinedButton(onClick = { onView(kind) }) { Text("View full size") }
             OutlinedButton(onClick = onPick) { Text("Replace") }
         }
     } else {
@@ -703,6 +721,51 @@ private fun AttachmentArea(store: Store, key: String, kind: AttachmentKind, att:
             Spacer(Modifier.width(8.dp))
             Text(if (kind == AttachmentKind.INVOICE) "Attach invoice" else "Attach meter photo", style = MaterialTheme.typography.titleMedium)
         }
+    }
+}
+
+/** The invoice's number boxes. [touched] is called after any edit so the caller can keep its editor open. */
+@Composable
+private fun InvoiceNumberFields(form: DraftForm, touched: () -> Unit) {
+    NumberField("Property water use (kL)", form.totalKl, { form.totalKl = it; touched() }, "The \"CONS.\" number next to the water meter on the invoice")
+    NumberField("Water (R)", form.water, { form.water = it; touched() })
+    NumberField("Water availability charge (R)", form.avail, { form.avail = it; touched() })
+    NumberField("Sewerage (R)", form.sewer, { form.sewer = it; touched() })
+    NumberField("Sewerage availability (R)", form.sewAvail, { form.sewAvail = it; touched() })
+    NumberField("Refuse charge (R)", form.refuse, { form.refuse = it; touched() })
+    NumberField("General rates (R)", form.rates, { form.rates = it; touched() })
+    NumberField("Interest (R) - if any", form.interest, { form.interest = it; touched() })
+    NumberField(
+        "Balance brought forward / adjustment (R)",
+        form.adjustments,
+        { form.adjustments = it; touched() },
+        "Anything left over from last month. Type a minus sign for a credit, e.g. -18.10",
+        KeyboardType.Text,
+    )
+    NumberField("Total payable on the invoice (R)", form.payable, { form.payable = it; touched() }, "Optional, but lets the app double-check the numbers")
+}
+
+/** The meter's number boxes (previous reading, reading now, replaced meter). */
+@Composable
+private fun MeterNumberFields(store: Store, key: String, form: DraftForm, touched: () -> Unit) {
+    NumberField(
+        "Previous reading (kL)",
+        form.prev,
+        {
+            form.prev = it
+            form.prevEdited = true
+            touched()
+        },
+        store.previousReadingFor(key).source.takeIf { !form.prevEdited },
+    )
+    NumberField("Reading now (kL)", form.curr, { form.curr = it; touched() }, "The digits shown on the meter in the photo")
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Switch(checked = form.replaced, onCheckedChange = { form.replaced = it; touched() })
+        Text("The meter was replaced this month", Modifier.weight(1f))
+    }
+    if (form.replaced) {
+        NumberField("Last reading of the old meter (kL)", form.oldFinal, { form.oldFinal = it; touched() })
+        NumberField("First reading of the new meter (kL)", form.newStart, { form.newStart = it; touched() })
     }
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -24,6 +25,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,16 +59,32 @@ import java.util.Date
 fun FilePickerDialog(kind: FileKind, onPick: (FoundFile) -> Unit, onOther: () -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     var allowed by remember { mutableStateOf(FileScanner.hasAccess()) }
-    // Coming back from Android's settings screen: look again.
+    // Bumped to look again: coming back from Android's settings screen, from another app (say the camera or WhatsApp), or the Refresh button.
+    var round by remember { mutableIntStateOf(0) }
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) allowed = FileScanner.hasAccess() }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allowed = FileScanner.hasAccess()
+                round++
+            }
+        }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
     var files by remember { mutableStateOf<List<FoundFile>?>(null) }
-    LaunchedEffect(allowed, kind) {
-        files = if (allowed) withContext(Dispatchers.IO) { FileScanner.scan(kind) } else null
+    var looking by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(allowed, kind, round) {
+        if (!allowed) {
+            files = null
+        } else {
+            looking = true
+            // The old list stays on screen while the new one is found, then the newest file is shown at the top.
+            files = withContext(Dispatchers.IO) { FileScanner.scan(kind, context.applicationContext) }
+            looking = false
+            listState.scrollToItem(0)
+        }
     }
     val noun = when (kind) {
         FileKind.PDF -> "PDF files"
@@ -110,11 +128,16 @@ fun FilePickerDialog(kind: FileKind, onPick: (FoundFile) -> Unit, onOther: () ->
                         }
                     }
                     else -> {
-                        OutlinedButton(onClick = onOther, modifier = Modifier.fillMaxWidth()) { Text("Look in other folders") }
-                        if (list.isEmpty()) {
-                            Text("No $noun were found in Downloads, Documents, DCIM or Pictures.", modifier = Modifier.padding(8.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { round++ }, enabled = !looking, modifier = Modifier.weight(1f)) {
+                                Text(if (looking) "Looking…" else "Refresh")
+                            }
+                            OutlinedButton(onClick = onOther, modifier = Modifier.weight(1f)) { Text("Other folders") }
                         }
-                        LazyColumn(Modifier.fillMaxSize()) {
+                        if (list.isEmpty()) {
+                            Text("No $noun were found in Downloads, Documents, DCIM, Pictures or WhatsApp.", modifier = Modifier.padding(8.dp))
+                        }
+                        LazyColumn(Modifier.fillMaxSize(), state = listState) {
                             items(list, key = { it.file.path }) { f ->
                                 FoundRow(f, kind, onClick = { onPick(f) })
                                 HorizontalDivider()
